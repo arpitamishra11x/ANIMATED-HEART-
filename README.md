@@ -2,21 +2,21 @@
 
 A tiny Python program that shows a pulsing heart animation.
 
-Quick overview
+Quick overview !
 - GUI mode (default): a colorful, pulsing heart using Tkinter.
 - ASCII mode: a text-only heart animation that runs in your terminal.
 
-Requirements
+Requirements !
 - Python 3.6 or newer (3.8+ recommended).
 - No extra Python packages needed.
 - On Linux you may need to install tkinter:
   - Debian/Ubuntu: `sudo apt install python3-tk`
   - Fedora: `sudo dnf install python3-tkinter`
 
-Files
+Files !
 - `main.py` — the only program file. It contains both GUI and ASCII modes.
 
-How to run
+How to run !
 - GUI (default):
   ```bash
   python main.py
@@ -26,7 +26,7 @@ How to run
   python main.py --ascii
   ```
 
-How to stop
+How to stop 1
 - GUI: close the window.
 - ASCII: press Ctrl+C in the terminal.
 
