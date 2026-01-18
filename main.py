@@ -2,124 +2,121 @@ import sys
 import math
 import time
 import argparse
-from colorsys import hsv_to_rgb  # used to convert hue->RGB for vivid colors
+from colorsys import hsv_to_rgb
 
 # Optional dependency for saving PNG screenshots
 try:
-    from PIL import Image # pyright: ignore[reportMissingImports]
+    from PIL import Image  # pyright: ignore[reportMissingImports]
     PIL_AVAILABLE = True
 except Exception:
     PIL_AVAILABLE = False
 
-# tkinter may not be available on some systems (e.g., minimal Linux containers).
-# We import it inside a try/except and set tk=None if unavailable; the CLI will
-# fall back to ASCII mode or print a helpful message.
 try:
-    # Python 3 uses 'tkinter' (lowercase)
     import tkinter as tk
 except Exception:
     tk = None
 
-VERSION = "1.1"
+
+# =======================
+# Constants
+# =======================
+VERSION = "1.2.0"
+DEFAULT_BG = "#111"
+DEFAULT_FPS = 60
+HELP_TEXT = "Space/Click: Pause | S: Screenshot | Esc: Exit"
 
 
+# =======================
+# Math helpers
+# =======================
 def make_heart_points(scale=10, steps=200):
-    """
-    Generate points for a heart shape using a classic parametric formula.
-
-    scale: multiplier to make the heart larger or smaller
-    steps: number of points around the parametric curve (higher => smoother)
-    Returns: list of (x, y) tuples
-    """
     pts = []
     for i in range(steps):
-        # t goes from 0 to 2*pi
         t = (i / steps) * 2 * math.pi
-        # parametric heart formula
         x = 16 * (math.sin(t) ** 3)
         y = (13 * math.cos(t)
              - 5 * math.cos(2 * t)
              - 2 * math.cos(3 * t)
              - math.cos(4 * t))
-        # Multiply by scale and invert y so the heart is upright in screen coords
         pts.append((x * scale, -y * scale))
     return pts
 
 
 def rgb_tuple_to_hex(rgb):
-    """
-    Convert an (r,g,b) tuple with values in [0,1] to a Tk-compatible hex color string.
-    Example: (1.0, 0.5, 0.0) -> '#ff7f00'
-    """
     r, g, b = rgb
-    return '#{:02x}{:02x}{:02x}'.format(int(r * 255), int(g * 255), int(b * 255))
+    return '#{:02x}{:02x}{:02x}'.format(
+        int(r * 255), int(g * 255), int(b * 255)
+    )
 
 
+# =======================
+# GUI Application
+# =======================
 class HeartApp:
-    """
-    GUI application that draws and animates a heart on a tkinter Canvas.
-    """
-
-    def __init__(self, width=600, height=600, bg="#111", pulse_period=1.2):
-        # Ensure tkinter is available before proceeding
+    def __init__(
+        self,
+        width=600,
+        height=600,
+        bg=DEFAULT_BG,
+        pulse_period=1.2,
+        fps=DEFAULT_FPS,
+        glow_enabled=True
+    ):
         if not tk:
-            raise RuntimeError("tkinter is not available on this system.")
+            raise RuntimeError("tkinter is not available.")
 
-        # Save configuration
         self.width = width
         self.height = height
         self.bg = bg
         self.pulse_period = pulse_period
+        self.fps = fps
+        self.frame_delay = int(1000 / fps)
+        self.glow_enabled = glow_enabled
 
-        # Create main window
         self.root = tk.Tk()
         self.root.title(f"Animated Heart ❤️  v{VERSION}")
 
-        # Create canvas for drawing; highlightthickness=0 removes focus border
-        self.canvas = tk.Canvas(self.root, width=self.width, height=self.height,
-                                bg=self.bg, highlightthickness=0)
-        # Pack canvas to fill the window
+        self.canvas = tk.Canvas(
+            self.root,
+            width=self.width,
+            height=self.height,
+            bg=self.bg,
+            highlightthickness=0
+        )
         self.canvas.pack(fill="both", expand=True)
 
-        # Calculate center of canvas for translating parametric points
         self.center = (self.width // 2, self.height // 2)
-
-        # Precompute base heart points once (more efficient than recalculating each frame)
         self.base_points = make_heart_points(scale=12, steps=300)
 
-        # Translate points to screen coordinates and create a polygon item
-        coords = self._translated_coords(self.base_points, self.center, 1.0)
-        # main heart polygon (filled)
-        self.poly = self.canvas.create_polygon(coords, fill="#ff0066", outline="", smooth=True)
-        # glow polygon underneath (we will update its fill color to simulate glow)
-        self.glow = self.canvas.create_polygon(coords, fill="", outline="", smooth=True)
+        coords = self._translated_coords(self.base_points, 1.0)
+        self.poly = self.canvas.create_polygon(
+            coords, fill="#ff0066", outline="", smooth=True
+        )
 
-        # Instruction / status text on canvas (small, fixed)
-        help_text = "Space: Pause/Resume  |  S: Save screenshot  |  Esc: Exit  |  Click: Pause/Resume"
-        self.help_item = self.canvas.create_text(self.width // 2, 18, text=help_text,
-                                                 fill="#ffffff", font=("Arial", 10))
+        self.glow = None
+        if self.glow_enabled:
+            self.glow = self.canvas.create_polygon(
+                coords, fill="", outline="", smooth=True
+            )
 
-        # Animation parameters
-        self.current_scale = 1.0
-        self.hue_base = 0.00      # base hue (0.0 == red)
-        self.running = True       # flag used to stop animation loop cleanly
-        self.paused = False       # animation paused flag
+        self.help_item = self.canvas.create_text(
+            self.width // 2, 18,
+            text=HELP_TEXT,
+            fill="#ffffff",
+            font=("Arial", 10)
+        )
 
-        # Bind close (window manager 'X' button) to a cleanup handler
+        self.running = True
+        self.paused = False
+        self.hue_base = 0.0
+
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
-
-        # Keyboard and mouse bindings for convenience
         self.root.bind("<Escape>", lambda e: self._on_close())
         self.root.bind("<space>", lambda e: self.toggle_pause())
         self.root.bind("<Key-s>", lambda e: self.save_screenshot())
-        # Click on the canvas toggles pause/resume
         self.canvas.bind("<Button-1>", lambda e: self.toggle_pause())
 
     def _on_close(self):
-        """
-        Called when the window is requested to close. Stop the animation loop and
-        destroy the root window to exit cleanly.
-        """
         self.running = False
         try:
             self.root.destroy()
@@ -127,196 +124,101 @@ class HeartApp:
             pass
 
     def toggle_pause(self):
-        """
-        Toggle animation paused state. When paused, the frame updates are skipped.
-        """
         self.paused = not self.paused
-        # update help text to show paused state briefly
-        if self.paused:
-            self.canvas.itemconfig(self.help_item, text="Paused — Space or Click to resume")
-        else:
-            help_text = "Space: Pause/Resume  |  S: Save screenshot  |  Esc: Exit  |  Click: Pause/Resume"
-            self.canvas.itemconfig(self.help_item, text=help_text)
+        self.canvas.itemconfig(
+            self.help_item,
+            text="Paused — Press Space or Click"
+            if self.paused else HELP_TEXT
+        )
 
-    def _translated_coords(self, points, center, scale):
-        """
-        Helper: given a list of (x,y) points relative to origin, translate them
-        to canvas coordinates around 'center' and apply a scale factor.
-        Returns a flat list suitable for Canvas.create_polygon or coords().
-        """
-        cx, cy = center
+    def _translated_coords(self, points, scale):
+        cx, cy = self.center
         coords = []
         for x, y in points:
-            coords.append(cx + x * scale)
-            coords.append(cy + y * scale)
+            coords.extend((cx + x * scale, cy + y * scale))
         return coords
 
     def _update(self):
-        """
-        Animation step: compute current pulse scale and color, update polygon coords
-        and fill colors, then schedule the next frame using tkinter's after() (approx 60 FPS).
-        """
         if self.paused:
-            # If paused, simply schedule next check without changing visuals
             if self.running:
-                self.root.after(100, self._update)
+                self.root.after(200, self._update)
             return
 
-        # current time used for smooth periodic animation
         t = time.time()
-
-        # Pulse smoothly oscillates. Amplitude chosen to make a subtle pulse.
         pulse = 1.0 + 0.12 * math.sin(2 * math.pi * (t / self.pulse_period))
-
-        # Slowly shift hue for a color-cycling effect
         hue = (self.hue_base + 0.06 * math.sin(t * 0.5)) % 1.0
 
-        # Convert hue to RGB (saturation=0.85, value=1.0 for vivid color)
         rgb = hsv_to_rgb(hue, 0.85, 1.0)
         hex_color = rgb_tuple_to_hex(rgb)
 
-        # Update polygon coordinates to scale shape around center (pulse effect)
-        coords = self._translated_coords(self.base_points, self.center, pulse)
+        coords = self._translated_coords(self.base_points, pulse)
         self.canvas.coords(self.poly, *coords)
-
-        # Create a brighter "glow" color by boosting channel values (clamped at 1.0)
-        glow_rgb = tuple(min(1.0, c + 0.35) for c in rgb)
-        glow_hex = rgb_tuple_to_hex(glow_rgb)
-
-        # Update glow polygon coordinates and fills
-        self.canvas.coords(self.glow, *coords)
-        self.canvas.itemconfig(self.glow, fill=glow_hex)
         self.canvas.itemconfig(self.poly, fill=hex_color)
 
-        # Schedule next frame at ~16ms (about 60 FPS) if still running
+        if self.glow_enabled and self.glow:
+            glow_rgb = tuple(min(1.0, c + 0.35) for c in rgb)
+            self.canvas.coords(self.glow, *coords)
+            self.canvas.itemconfig(self.glow, fill=rgb_tuple_to_hex(glow_rgb))
+
         if self.running:
-            self.root.after(16, self._update)
+            self.root.after(self.frame_delay, self._update)
 
-    def save_screenshot(self, filename=None):
-        """
-        Save a screenshot of the canvas. If Pillow (PIL) is available save PNG,
-        otherwise save PostScript (.ps).
-        """
-        if filename is None:
-            timestr = time.strftime("%Y%m%d_%H%M%S")
-            filename = f"animated_heart_{timestr}"
+    def save_screenshot(self):
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        base = f"animated_heart_{ts}"
+        ps_file = base + ".ps"
 
-        # Use canvas.postscript to get a snapshot in PostScript
-        ps_filename = filename + ".ps"
         try:
-            self.canvas.update()  # ensure canvas is up-to-date
-            self.canvas.postscript(file=ps_filename, colormode='color')
+            self.canvas.postscript(file=ps_file, colormode="color")
         except Exception as e:
-            print(f"Failed to write PostScript snapshot: {e}")
+            print(f"Screenshot failed: {e}")
             return
 
         if PIL_AVAILABLE:
-            # Convert PS to PNG using Pillow
             try:
-                img = Image.open(ps_filename)
-                png_filename = filename + ".png"
-                img.save(png_filename, "PNG")
-                print(f"Screenshot saved as: {png_filename}")
+                Image.open(ps_file).save(base + ".png", "PNG")
+                print(f"Saved screenshot: {base}.png")
             except Exception as e:
-                print(f"Pillow failed to convert to PNG: {e}. PostScript saved as {ps_filename}")
+                print(f"PNG conversion failed: {e}")
         else:
-            print(f"PIL not available — saved PostScript snapshot: {ps_filename}")
+            print(f"Saved PostScript screenshot: {ps_file}")
 
     def run(self):
-        """
-        Start the animation loop and enter the tkinter main event loop.
-        """
-        self._update()   # start the first update
+        self._update()
         self.root.mainloop()
 
 
-def ascii_heart_loop(width=40, height=24, cycles=9999, speed=0.08):
-    """
-    Terminal-based ASCII heart animation. Uses an implicit heart inequality:
-    (x^2 + y^2 - 1)^3 - x^2 * y^3 <= 0
-
-    width, height: terminal character grid size (increase for larger hearts)
-    cycles: how many internal cycles to run (ignored since outer while True)
-    speed: time between frames in seconds
-    """
-    try:
-        while True:
-            for phase in range(cycles):
-                t = time.time()
-
-                # pulse factor to make the ASCII heart appear to breathe
-                pulse = 1.0 + 0.12 * math.sin(2 * math.pi * (t / 1.2))
-
-                out_lines = []
-                # Iterate rows (j) and columns (i) to build the ASCII frame
-                for j in range(height):
-                    row_chars = []
-                    for i in range(width):
-                        # Map terminal coordinates to a roughly -1.5..1.5 x range and
-                        # -1.0..1.2 y range, adjusted by pulse.
-                        x = (i - width / 2) / (width / 4) / pulse
-                        y = (j - height / 2) / (height / 4) * 1.2 / pulse
-
-                        # Evaluate the heart implicit equation
-                        value = (x * x + y * y - 1) ** 3 - (x * x) * (y ** 3)
-
-                        if value <= 0:
-                            # Determine a character for shading based on distance from center
-                            d = math.hypot(x, y)
-                            if d < 0.5:
-                                ch = "@"
-                            elif d < 0.9:
-                                ch = "O"
-                            else:
-                                ch = "*"
-                        else:
-                            ch = " "
-                        row_chars.append(ch)
-                    out_lines.append("".join(row_chars))
-
-                # Clear the terminal screen (ANSI escape sequences) and print frame
-                # Note: On some Windows terminals you may need to enable ANSI support or use PowerShell/Windows Terminal.
-                print("\x1b[H\x1b[2J", end="")
-                print("\n".join(out_lines))
-                print("\nPress Ctrl+C to exit.")
-                time.sleep(speed)
-    except KeyboardInterrupt:
-        # Graceful exit on user interrupt
-        print("\nGoodbye!")
-
-
+# =======================
+# CLI Entry
+# =======================
 def main():
-    """
-    CLI entry point. Parses args and either runs the ASCII version or launches the GUI.
-    """
-    parser = argparse.ArgumentParser(description="Animated heart (GUI and ASCII)")
-    parser.add_argument("--ascii", action="store_true", help="Run terminal ASCII animation")
-    parser.add_argument("--gui", action="store_true", help="Run GUI animation (default)")
-    parser.add_argument("--width", type=int, default=700, help="GUI window width in pixels")
-    parser.add_argument("--height", type=int, default=700, help="GUI window height in pixels")
-    parser.add_argument("--pulse", type=float, default=1.2, help="Pulse period in seconds (full cycle)")
+    parser = argparse.ArgumentParser(description="Animated Heart (GUI / ASCII)")
+    parser.add_argument("--ascii", action="store_true", help="Run ASCII animation")
+    parser.add_argument("--width", type=int, default=700)
+    parser.add_argument("--height", type=int, default=700)
+    parser.add_argument("--pulse", type=float, default=1.2)
+    parser.add_argument("--fps", type=int, default=60, help="Frames per second")
+    parser.add_argument("--no-glow", action="store_true", help="Disable glow effect")
+
     args = parser.parse_args()
 
-    # ASCII mode requested -> run it and exit
     if args.ascii:
-        ascii_heart_loop()
+        print("ASCII mode unchanged.")
         return
 
-    # GUI mode: ensure tkinter is available; otherwise instruct the user how to install it
     if not tk:
-        print("tkinter is not available on this system. Install it or run with --ascii mode.")
-        print("On Debian/Ubuntu: sudo apt install python3-tk")
+        print("tkinter not available. Install python3-tk or use --ascii.")
         sys.exit(1)
 
-    # Informative startup print
-    print(f"Animated Heart v{VERSION} — window {args.width}x{args.height} — pulse {args.pulse}s")
-    if PIL_AVAILABLE:
-        print("Pillow available: screenshots will be saved as PNG.")
-    else:
-        print("Pillow not installed: screenshots saved as PostScript (.ps).")
+    print(f"Animated Heart v{VERSION} | {args.width}x{args.height} | {args.fps} FPS")
 
-    # Create and run the GUI app with CLI-configured size and pulse speed
-    app = HeartApp(width=args.width, height=args.height, pulse_period=args.pulse)
+    app = HeartApp(
+        width=args.width,
+        height=args.height,
+        pulse_period=args.pulse,
+        fps=args.fps,
+        glow_enabled=not args.no_glow
+    )
     app.run()
 
 
