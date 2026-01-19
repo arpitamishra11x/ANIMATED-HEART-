@@ -26,7 +26,7 @@ How to run !
   python main.py --ascii
   ```
 
-How to stop 1
+How to stop !
 - GUI: close the window.
 - ASCII: press Ctrl+C in the terminal.
 
@@ -34,5 +34,5 @@ If something breaks :
 - Error about `tkinter` — install the OS package (see above).
 - If colors or clearing look odd in Windows terminal, try PowerShell or Windows Terminal.
 
-Want more?
+Want more ?
 -in more we can add click effects, save frames as images/GIF, or add sound.
